@@ -2,7 +2,6 @@ package lexer
 
 import (
 	"unicode"
-	"fmt"
 	"unicode/utf8"
 )
 
@@ -17,36 +16,80 @@ type lexer struct {
 
 type stateFn func(*lexer) stateFn
 
-var simpleTokens = map[rune]tokenType {
+var simpleTokens = map[rune]tokenType{
 	'.': TknDot,
 	'(': TknOpenParen,
 	')': TknCloseParen,
 }
 
+var inVarAtom = []*unicode.RangeTable{
+	unicode.Letter,
+	unicode.Number,
+	unicode.Pc, // connector punctuation like '_'
+}
+
 func lexTopLevel(l *lexer) stateFn {
 	for l.pos < len(l.input) {
-		fmt.Printf("lexTopLevel: %d\n", l.start)
-		r, rlen := utf8.DecodeRuneInString(l.input[l.start:])
+		r, rlen := l.runeAt(l.start)
+		l.pos += rlen
 		simpleType, isSimple := simpleTokens[r]
 		switch {
 		case isSimple:
-			l.emit(simpleType, rlen)
+			l.emit(simpleType)
+		case unicode.IsSpace(r):
+			l.start += rlen
 		case unicode.IsUpper(r):
-			return nil // lexVariable
+			return lexVariable
+		case unicode.IsLower(r):
+			return lexSimpleAtom
+		case r == ':':
+			next, _ := l.runeAt(l.pos)
+			if next == '-' {
+				l.pos += 1
+				l.emit(TknColonDash)
+				continue
+			}
+			fallthrough
 		}
 	}
 	return nil
+}
+
+func lexVariable(l *lexer) stateFn {
+	l.forward(inVarAtom)
+	l.emit(TknVariable)
+	return lexTopLevel
+}
+
+func lexSimpleAtom(l *lexer) stateFn {
+	l.forward(inVarAtom)
+	l.emit(TknAtom)
+	return lexTopLevel
+}
+
+func (l *lexer) runeAt(pos int) (rune, int) {
+	return utf8.DecodeRuneInString(l.input[pos:])
+}
+
+func (l *lexer) forward(tables []*unicode.RangeTable) {
+	for {
+		r, rlen := utf8.DecodeRuneInString(l.input[l.pos:])
+		if !unicode.IsOneOf(tables, r) {
+			break
+		}
+		l.pos += rlen
+	}
 }
 
 func (l *lexer) run() {
 	for state := lexTopLevel; state != nil; {
 		state = state(l)
 	}
-	l.emit(TknEOF, 0)
+	l.emit(TknEOF)
 	close(l.tokens) // No more tokens will be delivered.
 }
 
-func Lex(name, input string) (*lexer, chan Token) {
+func Lex(name, input string) (*lexer, <-chan Token) {
 	l := &lexer{
 		name:   name,
 		input:  input,
@@ -56,10 +99,21 @@ func Lex(name, input string) (*lexer, chan Token) {
 	return l, l.tokens
 }
 
+func LexAll(name, input string) []Token {
+	ret := []Token{}
+	_, ch := Lex(name, input)
+	for {
+		t := <-ch
+		ret = append(ret, t)
+		if t.Typ == TknEOF {
+			break
+		}
+	}
+	return ret
+}
+
 // emit passes an Token back to the client.
-func (l *lexer) emit(t tokenType, extraLen int) {
-	l.pos += extraLen
+func (l *lexer) emit(t tokenType) {
 	l.tokens <- Token{t, l.input[l.start:l.pos]}
-	fmt.Printf("emitting %v %v\n", t, l.input[l.start:l.pos])
 	l.start = l.pos
 }
