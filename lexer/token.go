@@ -3,18 +3,20 @@ package lexer
 import "fmt"
 
 type Token struct {
-	Typ tokenType
+	Typ TokenType
 	Val string
+	pos int
 }
 
-type tokenType int
+type TokenType int
 
 const (
-	TknError tokenType = iota
+	TknError TokenType = iota
 	TknOpenParen
 	TknCloseParen
 	TknDot
 	TknColonDash
+	TknComma
 	TknAtom
 	TknVariable
 	TknNumber
@@ -27,9 +29,15 @@ func (t Token) String() string {
 		return "ERROR: " + t.Val
 	case TknEOF:
 		return "EOF"
+	case TknAtom:
+		return fmt.Sprintf("'%s'", cut(t.Val))
 	}
-	if len(t.Val) > 10 {
-		return fmt.Sprintf("%.7q...", t.Val)
+	return cut(t.Val)
+}
+
+func cut(str string) string {
+	if len(str) > 10 {
+		return fmt.Sprintf("%.7s...", str)
 	}
-	return fmt.Sprintf("%q", t.Val)
+	return str
 }

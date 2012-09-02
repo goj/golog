@@ -6,17 +6,19 @@ import (
 )
 
 type lexer struct {
-	name   string     // used only for error reports.
-	input  string     // the string being scanned.
-	start  int        // start position of this token.
-	pos    int        // current position in the input.
-	width  int        // width of last rune read from input.
-	tokens chan Token // channel of scanned tokens.
+	name    string // used only for error reports.
+	input   string // the string being scanned.
+	start   int    // start position of this token.
+	pos     int    // current position in the input.
+	width   int    // width of last rune read from input.
+	hasPeek bool
+	peeked  Token      // current token (lookahead)
+	tokens  chan Token // channel of scanned tokens.
 }
 
 type stateFn func(*lexer) stateFn
 
-var simpleTokens = map[rune]tokenType{
+var simpleTokens = map[rune]TokenType{
 	'.': TknDot,
 	'(': TknOpenParen,
 	')': TknCloseParen,
@@ -89,31 +91,8 @@ func (l *lexer) run() {
 	close(l.tokens) // No more tokens will be delivered.
 }
 
-func Lex(name, input string) (*lexer, <-chan Token) {
-	l := &lexer{
-		name:   name,
-		input:  input,
-		tokens: make(chan Token),
-	}
-	go l.run() // Concurrently run state machine.
-	return l, l.tokens
-}
-
-func LexAll(name, input string) []Token {
-	ret := []Token{}
-	_, ch := Lex(name, input)
-	for {
-		t := <-ch
-		ret = append(ret, t)
-		if t.Typ == TknEOF {
-			break
-		}
-	}
-	return ret
-}
-
 // emit passes an Token back to the client.
-func (l *lexer) emit(t tokenType) {
-	l.tokens <- Token{t, l.input[l.start:l.pos]}
+func (l *lexer) emit(t TokenType) {
+	l.tokens <- Token{t, l.input[l.start:l.pos], l.start}
 	l.start = l.pos
 }
