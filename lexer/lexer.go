@@ -16,8 +16,9 @@ type lexer struct {
 
 type stateFn func(*lexer) stateFn
 
-var simpleTokens = map[rune]tokenType{
+var simpleTokens = map[rune]TokenType{
 	'.': TknDot,
+	',': TknComma,
 	'(': TknOpenParen,
 	')': TknCloseParen,
 }
@@ -89,19 +90,19 @@ func (l *lexer) run() {
 	close(l.tokens) // No more tokens will be delivered.
 }
 
-func Lex(name, input string) (*lexer, <-chan Token) {
+func Tokens(name, input string) <-chan Token {
 	l := &lexer{
 		name:   name,
 		input:  input,
 		tokens: make(chan Token),
 	}
 	go l.run() // Concurrently run state machine.
-	return l, l.tokens
+	return l.tokens
 }
 
 func LexAll(name, input string) []Token {
 	ret := []Token{}
-	_, ch := Lex(name, input)
+	ch := Tokens(name, input)
 	for {
 		t := <-ch
 		ret = append(ret, t)
@@ -113,7 +114,9 @@ func LexAll(name, input string) []Token {
 }
 
 // emit passes an Token back to the client.
-func (l *lexer) emit(t tokenType) {
-	l.tokens <- Token{t, l.input[l.start:l.pos]}
+func (l *lexer) emit(t TokenType) {
+	l.tokens <- Token{Typ: t,
+				      Val: l.input[l.start:l.pos],
+					  Pos: l.start}
 	l.start = l.pos
 }
