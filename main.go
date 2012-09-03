@@ -1,7 +1,6 @@
 package main
 
 import (
-	"github.com/goj/golog/lexer"
 	"github.com/goj/golog/parser"
 	"github.com/kr/pretty"
 	"io/ioutil"
@@ -17,8 +16,7 @@ func main() {
 	}
 	src := string(data)
 	// toks := lexer.LexAll(filename, src)
-	lex := lexer.NewLexer(filename, src)
-	ast := parser.Parse(lex)
+	ast := parser.ParseString(filename, src, 0)
 	fmt.Printf("got the following AST:\n%# v\n\n"+
 		"for the following program:\n\n%s\n", pretty.Formatter(ast), src)
 }

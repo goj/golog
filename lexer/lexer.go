@@ -6,13 +6,9 @@ import (
 )
 
 type lexer struct {
-	name    string // used only for error reports.
 	input   string // the string being scanned.
 	start   int    // start position of this token.
 	pos     int    // current position in the input.
-	width   int    // width of last rune read from input.
-	hasPeek bool
-	peeked  Token      // current token (lookahead)
 	tokens  chan Token // channel of scanned tokens.
 }
 

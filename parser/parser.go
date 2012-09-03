@@ -1,88 +1,37 @@
 package parser
 
-import "fmt"
-import "github.com/goj/golog/lexer"
+import (
+	"fmt"
+	"github.com/goj/golog/lexer"
+	"os"
+	"strings"
+	"unicode/utf8"
+)
 
-func Parse(l lexer.Lexer) Program {
-	return parseProgram(l)
+type parser struct {
+	name      string             // used only for error reports.
+	input     string             // the string being scanned.
+	debug     bool               // is debug tracing enabled
+	trace     []string           // debug trace
+	peekedToken *lexer.Token        // current token
+	tokens    <-chan lexer.Token // channel of scanned tokens.
 }
 
-// Program -> ClauseOrFact* EOF
-func parseProgram(l lexer.Lexer) (result Program) {
-	for l.Peek().Typ != lexer.TknEOF {
-		result = append(result, parseClauseOrFact(l))
+type ParserFlags int
+
+const (
+	Debug ParserFlags = 1 << iota
+)
+
+func ParseString(filename, content string, flags ParserFlags) Program {
+	tokens := lexer.Tokens(content)
+	p := parser{
+		name:      filename,
+		input:     content,
+		debug:     flags & Debug != 0,
+		tokens:    tokens,
 	}
-	return
-}
-
-// ClauseOrFact -> ClauseHead (`.` | `:-` Term `.`)
-func parseClauseOrFact(l lexer.Lexer) (result Clause) {
-	result.Head = parseClauseHead(l)
-	switch l.Next().Typ {
-	case lexer.TknDot:
-		result.Body = Pred{Name: "true", Args: []Term{}}
-	case lexer.TknColonDash:
-		result.Body = parseTerm(l)
-		nextToken(l, lexer.TknDot, "clause body")
-	}
-	return
-}
-
-// ClauseHead -> atom [ArgList]
-func parseClauseHead(l lexer.Lexer) (result ClauseHead) {
-	tkn := nextToken(l, lexer.TknAtom, "clause head")
-	result.Name = tkn.Val
-	result.Args = []Term{}
-	if l.Peek().Typ == lexer.TknOpenParen {
-		result.Args = parseArgList(l)
-	}
-	return
-}
-
-// ArgList -> [`(` Term (`,` Term) `)`]
-func parseArgList(l lexer.Lexer) (result []Term) {
-	nextToken(l, lexer.TknOpenParen, "argument list")
-	result = []Term{}
-	for {
-		result = append(result, parseTerm(l))
-		tkn := l.Next()
-		switch tkn.Typ {
-		case lexer.TknComma:
-			continue
-		case lexer.TknCloseParen:
-			return
-		default:
-			synErrExpected(l, "`,` or `(`", "argument list", tkn)
-		}
-	}
-	return // never happens, as default panics
-}
-
-func parseTerm(l lexer.Lexer) Term {
-	tkn := l.Peek()
-	if tkn.Typ == lexer.TknVariable {
-		return parseVariable(l)
-	}
-	return parseClauseHead(l)
-}
-
-func parseVariable(l lexer.Lexer) Variable {
-	tkn := nextToken(l, lexer.TknVariable, "a term")
-	return Variable{Name: tkn.Val}
-}
-
-func nextToken(l lexer.Lexer, expectedType lexer.TokenType, what string) lexer.Token {
-	tkn := l.Next()
-	if tkn.Typ != expectedType {
-		synErrExpected(l, prettyType(expectedType), what, tkn)
-	}
-	return tkn
-}
-
-func synErrExpected(l lexer.Lexer, typeName, what string, tkn lexer.Token) {
-	err := fmt.Sprintf("expected %s when parsing %s, got %v", typeName, what, tkn)
-	l.Highlight(tkn, err)
-	panic(err)
+	return p.parseProgram()
 }
 
 func prettyType(t lexer.TokenType) string {
@@ -96,11 +45,83 @@ func prettyType(t lexer.TokenType) string {
 	case lexer.TknCloseParen:
 		return "`)`"
 	case lexer.TknColonDash:
-		return "`:=`"
+		return "`:-`"
 	case lexer.TknComma:
 		return "a comma"
 	case lexer.TknDot:
 		return "a dot"
 	}
 	return fmt.Sprintf("???(%d)", t)
+}
+
+func (p *parser) nextToken() (result lexer.Token) {
+	if p.peekedToken != nil {
+		result = *p.peekedToken
+		p.peekedToken = nil
+	} else {
+		result = <-p.tokens
+	}
+	return
+}
+
+func (p *parser) peekToken() lexer.Token {
+	if p.peekedToken == nil {
+		lookahead := <-p.tokens
+		p.peekedToken = &lookahead
+	}
+	return *p.peekedToken
+}
+
+func (p *parser) expectToken(expectedType lexer.TokenType) lexer.Token {
+	tkn := p.nextToken()
+	if tkn.Typ != expectedType {
+		p.synErrExpected(prettyType(expectedType), tkn)
+	}
+	return tkn
+}
+
+func (p *parser) synErrExpected(typeName string, tkn lexer.Token) {
+	whatsParsed := p.trace[len(p.trace)-1]
+	err := fmt.Sprintf("expected %s when parsing %s, got %v", typeName, whatsParsed, tkn)
+	p.syntaxError(tkn, err)
+	panic(err) // FIXME: don't panic on syntax errors
+}
+
+func (p *parser) syntaxError(t lexer.Token, err string) {
+	line, lno, col := findLineOf(p.input, t.Pos)
+	fmt.Printf("%s:%d:%d: %s\n", p.name, lno+1, col+1, err)
+	fmt.Print(line)
+	fmt.Print(strings.Repeat(" ", col))
+	fmt.Println(strings.Repeat("~", utf8.RuneCountInString(t.Val)))
+}
+
+func findLineOf(s string, pos int) (string, int, int) {
+	lines := strings.SplitAfter(s, "\n")
+	for lno, line := range lines {
+		if pos < len(line) {
+			return line, lno, pos
+		}
+		pos -= len(line)
+	}
+	return "", 0, 0
+}
+
+func trace(p *parser, msg string) *parser {
+	if p.debug {
+		fmt.Fprintf(os.Stderr, "%s+%s\n", indentFor(p.trace), msg)
+	}
+	p.trace = append(p.trace, msg)
+	return p
+}
+
+func un(p *parser) {
+	last := p.trace[len(p.trace)-1]
+	p.trace = p.trace[:len(p.trace)-1]
+	if p.debug {
+		fmt.Fprintf(os.Stderr, "%s-%s\n", indentFor(p.trace), last)
+	}
+}
+
+func indentFor(s []string) string {
+	return strings.Repeat(" ", len(s))
 }

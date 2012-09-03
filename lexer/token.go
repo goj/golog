@@ -5,7 +5,7 @@ import "fmt"
 type Token struct {
 	Typ TokenType
 	Val string
-	pos int
+	Pos int
 }
 
 type TokenType int
